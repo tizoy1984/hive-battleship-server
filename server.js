@@ -17,6 +17,69 @@ let games = {};
 io.on('connection', (socket) => {
     console.log(`🟢 Speler verbonden: ${socket.id}`);
 
+    // --- NEW: CUSTOM LOBBY LOGIC ---
+    
+    // 1. Player creates a private room
+    socket.on('create_lobby', (data) => {
+        // Generate a random 5-character room code (e.g., "x7y9a")
+        const roomCode = Math.random().toString(36).substring(2, 7);
+        
+        const playerObj = {
+            socket: socket,
+            username: data.username,
+            board: data.board 
+        };
+
+        // Create a new game room in memory, waiting for Player 2
+        games[roomCode] = {
+            player1: playerObj,
+            player2: null, // Empty for now!
+            currentTurn: socket.id,
+            hits: { [socket.id]: 0 }
+        };
+
+        socket.join(roomCode);
+        
+        // Tell the creator their room code so they can share it
+        socket.emit('lobby_created', { roomCode: roomCode });
+        console.log(`🏠 Lobby created: ${roomCode} by ${data.username}`);
+    });
+
+    // 2. Player 2 joins using the code
+    socket.on('join_lobby', (data) => {
+        const { username, board, roomCode } = data;
+        const game = games[roomCode];
+
+        // Check if the room exists and isn't full
+        if (!game) {
+            socket.emit('lobby_error', { message: "Room not found!" });
+            return;
+        }
+        if (game.player2 !== null) {
+            socket.emit('lobby_error', { message: "Room is already full!" });
+            return;
+        }
+
+        // Add Player 2 to the game
+        const playerObj = {
+            socket: socket,
+            username: username,
+            board: board 
+        };
+
+        game.player2 = playerObj;
+        game.hits[socket.id] = 0; // Initialize Player 2's score
+
+        socket.join(roomCode);
+
+        // Start the game for both players!
+        game.player1.socket.emit('match_found', { opponentName: playerObj.username, yourTurn: true, roomId: roomCode });
+        socket.emit('match_found', { opponentName: game.player1.username, yourTurn: false, roomId: roomCode });
+        
+        console.log(`⚔️ Match started in lobby ${roomCode}!`);
+    });
+    // --- END OF CUSTOM LOBBY LOGIC ---
+
     socket.on('find_match', (data) => {
         const playerObj = {
             socket: socket,
