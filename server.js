@@ -107,7 +107,7 @@ io.on('connection', (socket) => {
         if (isHit) {
             game.hits[socket.id] += 1; 
             
-            if (game.hits[socket.id] >= 1) {
+            if (game.hits[socket.id] >= 17) {
                 console.log(`🏆 GAME OVER! ${attacker.username} won! Initiating payout...`);
                 
                 // Trigger the automatic blockchain payout!
@@ -137,4 +137,5 @@ const PORT = 3000;
 server.listen(PORT, () => {
     console.log(`🚀 Battleship Server draait op http://localhost:${PORT}`);
 });
+
 
