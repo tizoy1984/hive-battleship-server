@@ -20,7 +20,7 @@ const io = new Server(server, {
 // --- STATE MANAGEMENT ---
 let connectedUsers = {}; // Tracks socket.id -> username
 let games = {};           
-let pendingChallenges = {}; // Tracks Host -> Guest mapping
+let pendingChallenges = {}; // NEW: Remembers Host -> Guest pairings for auto-join
 
 function broadcastLobbyState() {
     const usersInLobby = Object.values(connectedUsers);
@@ -41,32 +41,41 @@ function broadcastLobbyState() {
     });
 }
 
+async function processMatchPayout(winner, loser) {
+    if (!ACTIVE_KEY) return console.log("❌ Payout Error: No Key");
+    const payouts = [
+        { to: winner, amount: "1.900 HIVE", memo: `🏆 Victory payout vs @${loser}` },
+        { to: 'null', amount: "0.050 HIVE", memo: "🔥 Burn" },
+        { to: 'cbrs', amount: "0.050 HIVE", memo: "🏦 Dev Fee" }
+    ];
+    for (const p of payouts) {
+        try {
+            await client.broadcast.transfer({ from: ACCOUNT_NAME, to: p.to, amount: p.amount, memo: p.memo }, ACTIVE_KEY);
+        } catch (err) { console.error(`❌ Payout failed:`, err.message); }
+    }
+}
+
 io.on('connection', (socket) => {
     
-    // CRITICAL: Ensure users are registered
+    // --- REGISTRATION (Enforce Lowercase) ---
     socket.on('register_user', (data) => {
         if (data.username) {
             connectedUsers[socket.id] = data.username.toLowerCase();
-            console.log(`👤 User Registered: ${data.username} on socket ${socket.id}`);
             broadcastLobbyState();
         }
     });
 
-    // --- CHALLENGE SYSTEM LOGIC ---
+    // --- CHALLENGE LOGIC ---
     socket.on('send_challenge', (data) => {
-        const targetUser = data.to.toLowerCase();
-        // Find the specific socket ID for the target username
-        const targetSocketId = Object.keys(connectedUsers).find(id => connectedUsers[id] === targetUser);
+        const fromUser = data.from.toLowerCase();
+        const toUser = data.to.toLowerCase();
         
-        console.log(`⚔️ Attempting Challenge: From ${data.from} to ${targetUser}`);
+        // Find Target Socket
+        const targetSocketId = Object.keys(connectedUsers).find(id => connectedUsers[id] === toUser);
         
         if (targetSocketId) {
-            pendingChallenges[data.from.toLowerCase()] = targetUser; 
-            io.to(targetSocketId).emit('receive_challenge', { from: data.from });
-            console.log(`✅ Challenge Delivered to socket: ${targetSocketId}`);
-        } else {
-            console.log(`❌ Challenge Failed: No active socket found for @${targetUser}`);
-            socket.emit('lobby_error', { message: `Commander @${targetUser} is offline or not registered.` });
+            pendingChallenges[fromUser] = toUser; // Remember this challenge
+            io.to(targetSocketId).emit('receive_challenge', { from: fromUser });
         }
     });
 
@@ -80,50 +89,57 @@ io.on('connection', (socket) => {
 
     socket.on('create_lobby', (data) => {
         const roomCode = Math.random().toString(36).substring(2, 7);
+        const hostUser = data.username.toLowerCase();
+        
         games[roomCode] = {
-            player1: { socket, username: data.username, board: data.board },
-            player2: null, 
-            currentTurn: socket.id, 
+            player1: { socket, username: hostUser, board: data.board },
+            player2: null,
+            currentTurn: socket.id,
             hits: { [socket.id]: 0 }
         };
         socket.join(roomCode);
         socket.emit('lobby_created', { roomCode });
 
-        const guestName = pendingChallenges[data.username.toLowerCase()];
+        // AUTO-INVITE GUEST IF THIS WAS A CHALLENGE
+        const guestName = pendingChallenges[hostUser];
         if (guestName) {
             const guestSocketId = Object.keys(connectedUsers).find(id => connectedUsers[id] === guestName);
             if (guestSocketId) {
-                io.to(guestSocketId).emit('challenge_room_ready', { roomCode, host: data.username });
+                io.to(guestSocketId).emit('challenge_room_ready', { roomCode, host: hostUser });
             }
-            delete pendingChallenges[data.username.toLowerCase()];
+            delete pendingChallenges[hostUser]; // Clear memory
         }
-        broadcastLobbyState();
+        
+        broadcastLobbyState(); 
     });
 
     socket.on('join_lobby', (data) => {
         const game = games[data.roomCode];
         if (!game || game.player2 !== null) return;
-        game.player2 = { socket, username: data.username, board: data.board };
+        game.player2 = { socket, username: data.username.toLowerCase(), board: data.board };
         game.hits[socket.id] = 0;
         socket.join(data.roomCode);
         game.player1.socket.emit('match_found', { opponentName: data.username, yourTurn: true, roomId: data.roomCode });
         socket.emit('match_found', { opponentName: game.player1.username, yourTurn: false, roomId: data.roomCode });
-        broadcastLobbyState();
+        broadcastLobbyState(); 
     });
 
     socket.on('fire_missile', (data) => {
         const game = games[data.roomId];
         if (!game || game.currentTurn !== socket.id) return;
-        const isPlayer1 = (socket.id === game.player1.socket.id);
-        const defender = isPlayer1 ? game.player2 : game.player1;
+        const isP1 = (socket.id === game.player1.socket.id);
+        const defender = isP1 ? game.player2 : game.player1;
         const isHit = (defender.board[data.targetIndex] !== null);
         io.to(data.roomId).emit('missile_result', { targetIndex: data.targetIndex, isHit, attackerId: socket.id });
+
         if (isHit) {
             game.hits[socket.id] += 1;
             if (game.hits[socket.id] >= 17) {
-                io.to(data.roomId).emit('game_over', { winnerId: socket.id, winnerName: (isPlayer1 ? game.player1.username : game.player2.username), loserName: defender.username });
+                const winner = isP1 ? game.player1.username : game.player2.username;
+                io.to(data.roomId).emit('game_over', { winnerId: socket.id, winnerName: winner, loserName: defender.username });
+                processMatchPayout(winner, defender.username);
                 delete games[data.roomId];
-                broadcastLobbyState();
+                broadcastLobbyState(); 
                 return;
             }
         }
@@ -132,11 +148,10 @@ io.on('connection', (socket) => {
     });
 
     socket.on('disconnect', () => {
-        console.log(`📡 Disconnect: ${socket.id} (@${connectedUsers[socket.id]})`);
         delete connectedUsers[socket.id];
-        broadcastLobbyState();
+        broadcastLobbyState(); 
     });
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`🚀 Battleship Server running on port ${PORT}`));
+server.listen(PORT, () => console.log(`🚀 Server on port ${PORT}`));
