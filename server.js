@@ -39,7 +39,6 @@ io.on('connection', (socket) => {
         }
     });
 
-    // --- CHALLENGE SYSTEM WITH 30s TIMER ---
     socket.on('send_challenge', (data) => {
         const fromUser = data.from.toLowerCase().trim();
         const toUser = data.to.toLowerCase().trim();
@@ -49,14 +48,14 @@ io.on('connection', (socket) => {
             pendingChallenges[fromUser] = toUser; 
             io.to(targetSocketId).emit('receive_challenge', { from: fromUser });
 
-            // Set 30-second timeout
+            // 30-second timeout for tactical window
             setTimeout(() => {
                 if (pendingChallenges[fromUser] === toUser) {
                     delete pendingChallenges[fromUser];
                     socket.emit('challenge_expired', { to: toUser });
                     io.to(targetSocketId).emit('challenge_withdrawn', { from: fromUser });
                 }
-            }, 30000); // 30 seconds
+            }, 30000);
         }
     });
 
