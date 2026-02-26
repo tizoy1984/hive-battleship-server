@@ -79,13 +79,32 @@ async function processMatchPayout(winner, loser) {
 }
 
 io.on('connection', (socket) => {
+    
     console.log(`📡 Player connected: ${socket.id}`);
 
-    // --- NEW: USER REGISTRATION ---
-    // Links Hive username to socket ID and updates the radar
+    // --- USER REGISTRATION ---
     socket.on('register_user', (data) => {
         connectedUsers[socket.id] = data.username;
         broadcastLobbyState();
+    });
+
+    // --- NEW: CHALLENGE SYSTEM LOGIC ---
+    // Relays a direct challenge from one user to another
+    socket.on('send_challenge', (data) => {
+        const targetSocketId = Object.keys(connectedUsers).find(id => connectedUsers[id] === data.to);
+        if (targetSocketId) {
+            console.log(`⚔️ Challenge: @${data.from} challenged @${data.to}`);
+            io.to(targetSocketId).emit('receive_challenge', { from: data.from });
+        }
+    });
+
+    // Handles acceptance and notifies the host to start the wager
+    socket.on('accept_challenge', (data) => {
+        const hostSocketId = Object.keys(connectedUsers).find(id => connectedUsers[id] === data.host);
+        if (hostSocketId) {
+            console.log(`🤝 Challenge Accepted: @${data.guest} vs @${data.host}`);
+            io.to(hostSocketId).emit('challenge_accepted_by_guest', { guest: data.guest });
+        }
     });
 
     // --- CUSTOM LOBBY LOGIC ---
@@ -101,7 +120,7 @@ io.on('connection', (socket) => {
         socket.join(roomCode);
         socket.emit('lobby_created', { roomCode });
         
-        broadcastLobbyState(); // Update radar with the new open room
+        broadcastLobbyState(); 
         console.log(`🏠 Lobby created: ${roomCode} by ${data.username}`);
     });
 
@@ -119,7 +138,7 @@ io.on('connection', (socket) => {
         game.player1.socket.emit('match_found', { opponentName: playerObj.username, yourTurn: true, roomId: roomCode });
         socket.emit('match_found', { opponentName: game.player1.username, yourTurn: false, roomId: roomCode });
         
-        broadcastLobbyState(); // Update radar to show the battle is now active
+        broadcastLobbyState(); 
         console.log(`⚔️ Match started in lobby ${roomCode}!`);
     });
 
@@ -148,7 +167,7 @@ io.on('connection', (socket) => {
                 processMatchPayout(attacker.username, defender.username);
                 
                 delete games[roomId];
-                broadcastLobbyState(); // Remove from active battles list
+                broadcastLobbyState(); 
                 return;
             }
         }
@@ -156,14 +175,12 @@ io.on('connection', (socket) => {
         io.to(roomId).emit('turn_update', { currentTurnId: game.currentTurn });
     });
 
-    // --- UPDATED DISCONNECT LOGIC ---
+    // --- DISCONNECT LOGIC ---
     socket.on('disconnect', () => {
         console.log(`📡 Player disconnected: ${socket.id}`);
         
-        // Remove from online list
         delete connectedUsers[socket.id];
 
-        // Clean up any hosted games that were waiting for an opponent
         for (const code in games) {
             if (games[code].player1.socket.id === socket.id && games[code].player2 === null) {
                 console.log(`🗑️ Closing empty lobby ${code} (host disconnected)`);
@@ -171,7 +188,7 @@ io.on('connection', (socket) => {
             }
         }
 
-        broadcastLobbyState(); // Update everyone's radar
+        broadcastLobbyState(); 
     });
 });
 
