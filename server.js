@@ -62,6 +62,17 @@ io.on('connection', (socket) => {
         }
     });
 
+    // --- NEW: SECURE ROOM VALIDATION ---
+    socket.on('validate_room', (data) => {
+        const roomCode = data.roomCode;
+        
+        // Check if the room exists in the 'games' object AND if it is still open (player2 is null)
+        const roomExists = games[roomCode] && games[roomCode].player2 === null;
+        
+        // Reply instantly to the specific client who asked
+        socket.emit('room_validation_result', { exists: roomExists });
+    });
+
     socket.on('send_challenge', (data) => {
         const fromUser = data.from.toLowerCase().trim();
         const toUser = data.to.toLowerCase().trim();
@@ -92,8 +103,10 @@ io.on('connection', (socket) => {
     });
 
     socket.on('create_lobby', (data) => {
-        const roomCode = Math.random().toString(36).substring(2, 7);
+        // Generate an uppercase 5-letter room code for consistency
+        const roomCode = Math.random().toString(36).substring(2, 7).toUpperCase();
         const hostName = data.username.toLowerCase().trim();
+        
         games[roomCode] = {
             player1: { socket, username: hostName, board: data.board },
             player2: null, 
