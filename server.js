@@ -20,6 +20,9 @@ let connectedUsers = {}; // Tracks socket.id -> username
 let games = {};           
 let pendingChallenges = {}; // Tracks Host -> Guest pairings
 
+// NEW: GLOBAL TETRIS ARCADE STATE
+let globalTetrisScores = []; // Holds { username, score, timestamp }
+
 function broadcastLobbyState() {
     const usersInLobby = Object.values(connectedUsers);
     const openRooms = Object.keys(games)
@@ -54,7 +57,38 @@ async function processMatchPayout(winner, loser) {
 }
 
 io.on('connection', (socket) => {
-    
+    console.log(`📡 New Connection: ${socket.id}`);
+
+    // --- ARCADE LOGIC ---
+    // Send current leaderboard immediately upon connection
+    socket.emit('update_global_tetris_leaderboard', globalTetrisScores);
+
+    socket.on('submit_tetris_score', (data) => {
+        const { username, score } = data;
+        if (!username || typeof score !== 'number') return;
+
+        const cleanUser = username.toLowerCase().trim();
+        console.log(`🧩 Tetris Submission: @${cleanUser} scored ${score}`);
+
+        // Update existing or add new
+        const existingIdx = globalTetrisScores.findIndex(s => s.username === cleanUser);
+        if (existingIdx !== -1) {
+            if (score > globalTetrisScores[existingIdx].score) {
+                globalTetrisScores[existingIdx].score = score;
+                globalTetrisScores[existingIdx].timestamp = Date.now();
+            }
+        } else {
+            globalTetrisScores.push({ username: cleanUser, score: score, timestamp: Date.now() });
+        }
+
+        // Sort Top 10 and broadcast
+        globalTetrisScores.sort((a, b) => b.score - a.score);
+        globalTetrisScores = globalTetrisScores.slice(0, 10);
+        
+        io.emit('update_global_tetris_leaderboard', globalTetrisScores);
+    });
+
+    // --- BATTLESHIP LOGIC ---
     socket.on('register_user', (data) => {
         if (data.username) {
             connectedUsers[socket.id] = data.username.toLowerCase().trim();
@@ -92,7 +126,7 @@ io.on('connection', (socket) => {
     });
 
     socket.on('create_lobby', (data) => {
-        const roomCode = Math.random().toString(36).substring(2, 7);
+        const roomCode = Math.random().toString(36).substring(2, 7).toUpperCase();
         const hostName = data.username.toLowerCase().trim();
         games[roomCode] = {
             player1: { socket, username: hostName, board: data.board },
@@ -126,7 +160,6 @@ io.on('connection', (socket) => {
         broadcastLobbyState();
     });
 
-    // --- GAMEPLAY LOGIC (RESTORED) ---
     socket.on('fire_missile', (data) => {
         const game = games[data.roomId];
         if (!game || game.currentTurn !== socket.id) return;
@@ -152,28 +185,17 @@ io.on('connection', (socket) => {
         io.to(data.roomId).emit('turn_update', { currentTurnId: game.currentTurn });
     });
 
-    // --- UPDATED DISCONNECT CLEANUP ---
     socket.on('disconnect', () => {
-        console.log(`📡 Disconnect: ${socket.id}`);
-        
-        // Remove from connected users
         delete connectedUsers[socket.id];
-
-        // Clean up any rooms associated with this socket
         for (const roomId in games) {
             const game = games[roomId];
-            const isP1 = game.player1.socket.id === socket.id;
-            const isP2 = game.player2 && game.player2.socket.id === socket.id;
-
-            if (isP1 || isP2) {
-                console.log(`🗑️ Removing stuck game: ${roomId}`);
+            if (game.player1.socket.id === socket.id || (game.player2 && game.player2.socket.id === socket.id)) {
                 delete games[roomId];
             }
         }
-        
         broadcastLobbyState();
     });
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`🚀 Battleship Server on port ${PORT}`));
+server.listen(PORT, () => console.log(`🚀 Hivecade Global Server on port ${PORT}`));
