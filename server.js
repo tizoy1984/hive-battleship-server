@@ -23,45 +23,61 @@ let pendingChallenges = {}; // Tracks Host -> Guest pairings
 // GLOBAL TETRIS ARCADE STATE
 let globalTetrisScores = []; // Holds { username, score, timestamp }
 
-// --- NEW: FETCH SCORES FROM BLOCKCHAIN ON STARTUP ---
+// --- NEW: FETCH MASTER SAVE FILE FROM BLOCKCHAIN ---
 async function loadBlockchainScores() {
-    console.log("📡 Scanning Hive Blockchain for permanent Tetris scores...");
+    console.log("📡 Searching 'cbrs' history for the Master Tetris Leaderboard...");
     try {
-        // Fetch the last 1000 operations from the hub account
-        const history = await client.call('condenser_api', 'get_account_history', [ACCOUNT_NAME, -1, 1000]);
-        let scoresMap = {};
-
-        history.forEach(item => {
-            const op = item[1].op;
-            // Look for our specific game save data
-            if (op[0] === 'custom_json' && op[1].id === 'hivecade_score') {
+        // Fetch recent history from the hub account
+        const history = await client.call('condenser_api', 'get_account_history', [ACCOUNT_NAME, -1, 300]);
+        
+        // Loop BACKWARDS to find the MOST RECENT save file
+        for (let i = history.length - 1; i >= 0; i--) {
+            const op = history[i][1].op;
+            
+            if (op && op[0] === 'custom_json' && op[1].id === 'hivecade_master_leaderboard') {
                 try {
                     const data = JSON.parse(op[1].json);
-                    if (data.game === 'tetris') {
-                        const user = op[1].required_posting_auths[0];
-                        const score = parseInt(data.score);
-
-                        // Only keep the highest score per user
-                        if (!scoresMap[user] || score > scoresMap[user]) {
-                            scoresMap[user] = score;
-                        }
+                    if (data.game === 'tetris' && data.leaderboard) {
+                        globalTetrisScores = data.leaderboard;
+                        console.log(`✅ SUCCESS: Loaded ${globalTetrisScores.length} scores from master backup!`);
+                        return; // Stop searching, we found the newest one!
                     }
                 } catch (e) {
-                    // Ignore malformed JSON
+                    // Ignore parse errors
                 }
             }
-        });
-
-        // Convert the map back to our sorted array format
-        globalTetrisScores = Object.keys(scoresMap).map(user => ({
-            username: user,
-            score: scoresMap[user],
-            timestamp: Date.now() // Treat as fresh
-        })).sort((a, b) => b.score - a.score).slice(0, 10);
-
-        console.log(`✅ Successfully loaded ${globalTetrisScores.length} global scores from the blockchain!`);
+        }
+        console.log("⚠️ No master leaderboard found in recent history. Starting fresh.");
     } catch (err) {
         console.error("❌ Failed to load blockchain scores:", err.message);
+    }
+}
+
+// --- NEW: BACKUP MASTER LIST TO HIVE ---
+async function saveMasterLeaderboardToHive() {
+    if (!ACTIVE_KEY) {
+        console.log("⚠️ Cannot backup to Hive: No ACTIVE_KEY set.");
+        return;
+    }
+    
+    const op = [
+        'custom_json',
+        {
+            required_auths: [ACCOUNT_NAME], // Using Active Key auth
+            required_posting_auths: [],
+            id: 'hivecade_master_leaderboard',
+            json: JSON.stringify({ 
+                game: 'tetris', 
+                leaderboard: globalTetrisScores 
+            })
+        }
+    ];
+
+    try {
+        await client.broadcast.sendOperations([op], ACTIVE_KEY);
+        console.log("💾 Master leaderboard successfully backed up to Hive!");
+    } catch (err) {
+        console.error("❌ Failed to backup leaderboard:", err.message);
     }
 }
 
@@ -112,22 +128,31 @@ io.on('connection', (socket) => {
         const cleanUser = username.toLowerCase().trim();
         console.log(`🧩 Tetris Submission: @${cleanUser} scored ${score}`);
 
+        let leaderboardChanged = false;
+
         // Update existing or add new
         const existingIdx = globalTetrisScores.findIndex(s => s.username === cleanUser);
         if (existingIdx !== -1) {
             if (score > globalTetrisScores[existingIdx].score) {
                 globalTetrisScores[existingIdx].score = score;
                 globalTetrisScores[existingIdx].timestamp = Date.now();
+                leaderboardChanged = true;
             }
         } else {
             globalTetrisScores.push({ username: cleanUser, score: score, timestamp: Date.now() });
+            leaderboardChanged = true;
         }
 
-        // Sort Top 10 and broadcast
-        globalTetrisScores.sort((a, b) => b.score - a.score);
-        globalTetrisScores = globalTetrisScores.slice(0, 10);
-        
-        io.emit('update_global_tetris_leaderboard', globalTetrisScores);
+        if (leaderboardChanged) {
+            // Sort Top 10 and broadcast
+            globalTetrisScores.sort((a, b) => b.score - a.score);
+            globalTetrisScores = globalTetrisScores.slice(0, 10);
+            
+            io.emit('update_global_tetris_leaderboard', globalTetrisScores);
+            
+            // Backup the new state to the blockchain!
+            saveMasterLeaderboardToHive();
+        }
     });
 
     // --- BATTLESHIP LOGIC ---
