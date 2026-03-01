@@ -20,8 +20,50 @@ let connectedUsers = {}; // Tracks socket.id -> username
 let games = {};           
 let pendingChallenges = {}; // Tracks Host -> Guest pairings
 
-// NEW: GLOBAL TETRIS ARCADE STATE
+// GLOBAL TETRIS ARCADE STATE
 let globalTetrisScores = []; // Holds { username, score, timestamp }
+
+// --- NEW: FETCH SCORES FROM BLOCKCHAIN ON STARTUP ---
+async function loadBlockchainScores() {
+    console.log("📡 Scanning Hive Blockchain for permanent Tetris scores...");
+    try {
+        // Fetch the last 1000 operations from the hub account
+        const history = await client.call('condenser_api', 'get_account_history', [ACCOUNT_NAME, -1, 1000]);
+        let scoresMap = {};
+
+        history.forEach(item => {
+            const op = item[1].op;
+            // Look for our specific game save data
+            if (op[0] === 'custom_json' && op[1].id === 'hivecade_score') {
+                try {
+                    const data = JSON.parse(op[1].json);
+                    if (data.game === 'tetris') {
+                        const user = op[1].required_posting_auths[0];
+                        const score = parseInt(data.score);
+
+                        // Only keep the highest score per user
+                        if (!scoresMap[user] || score > scoresMap[user]) {
+                            scoresMap[user] = score;
+                        }
+                    }
+                } catch (e) {
+                    // Ignore malformed JSON
+                }
+            }
+        });
+
+        // Convert the map back to our sorted array format
+        globalTetrisScores = Object.keys(scoresMap).map(user => ({
+            username: user,
+            score: scoresMap[user],
+            timestamp: Date.now() // Treat as fresh
+        })).sort((a, b) => b.score - a.score).slice(0, 10);
+
+        console.log(`✅ Successfully loaded ${globalTetrisScores.length} global scores from the blockchain!`);
+    } catch (err) {
+        console.error("❌ Failed to load blockchain scores:", err.message);
+    }
+}
 
 function broadcastLobbyState() {
     const usersInLobby = Object.values(connectedUsers);
@@ -198,4 +240,8 @@ io.on('connection', (socket) => {
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`🚀 Hivecade Global Server on port ${PORT}`));
+server.listen(PORT, async () => {
+    console.log(`🚀 Hivecade Global Server on port ${PORT}`);
+    // Boot up sequence: Load the permanent scores!
+    await loadBlockchainScores(); 
+});
