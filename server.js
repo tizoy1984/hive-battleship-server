@@ -16,41 +16,59 @@ const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: "*", methods: ["GET", "POST"] } });
 
 // --- STATE MANAGEMENT ---
-let connectedUsers = {}; // Tracks socket.id -> username
+let connectedUsers = {}; 
 let games = {};           
-let pendingChallenges = {}; // Tracks Host -> Guest pairings
+let pendingChallenges = {}; 
 
-// GLOBAL TETRIS ARCADE STATE
-let globalTetrisScores = []; // Holds { username, score, timestamp }
+// GLOBAL ARCADE STATE
+let globalTetrisScores = [];   // Holds { username, score, timestamp }
+let globalInvadersScores = []; // Holds { username, score, timestamp } <-- NEW
 
 // --- FETCH MASTER SAVE FILE FROM BLOCKCHAIN ---
 async function loadBlockchainScores() {
-    console.log("📡 Searching 'cbrs' history for the Master Tetris Leaderboard...");
+    console.log("📡 Searching 'cbrs' history for the Master Leaderboards...");
     try {
-        const history = await client.call('condenser_api', 'get_account_history', [ACCOUNT_NAME, -1, 300]);
+        // Increased history search depth to ensure we find both game backups
+        const history = await client.call('condenser_api', 'get_account_history', [ACCOUNT_NAME, -1, 1000]);
+        let tetrisFound = false;
+        let invadersFound = false;
+
         for (let i = history.length - 1; i >= 0; i--) {
             const op = history[i][1].op;
             if (op && op[0] === 'custom_json' && op[1].id === 'hivecade_master_leaderboard') {
                 try {
                     const data = JSON.parse(op[1].json);
-                    if (data.game === 'tetris' && data.leaderboard) {
+                    
+                    if (data.game === 'tetris' && data.leaderboard && !tetrisFound) {
                         globalTetrisScores = data.leaderboard;
-                        console.log(`✅ SUCCESS: Loaded ${globalTetrisScores.length} scores from master backup!`);
-                        return;
+                        console.log(`✅ SUCCESS: Loaded ${globalTetrisScores.length} Tetris scores from master backup!`);
+                        tetrisFound = true;
                     }
+                    
+                    // NEW: Load Invaders Master Backup
+                    if (data.game === 'invaders' && data.leaderboard && !invadersFound) {
+                        globalInvadersScores = data.leaderboard;
+                        console.log(`✅ SUCCESS: Loaded ${globalInvadersScores.length} Invaders scores from master backup!`);
+                        invadersFound = true;
+                    }
+
+                    // Stop searching if both are found
+                    if (tetrisFound && invadersFound) return;
                 } catch (e) { }
             }
         }
-        console.log("⚠️ No master leaderboard found in recent history. Starting fresh.");
+        if (!tetrisFound) console.log("⚠️ No master Tetris leaderboard found. Starting fresh.");
+        if (!invadersFound) console.log("⚠️ No master Invaders leaderboard found. Starting fresh.");
     } catch (err) {
         console.error("❌ Failed to load blockchain scores:", err.message);
     }
 }
 
 // --- BACKUP MASTER LIST TO HIVE ---
-async function saveMasterLeaderboardToHive() {
+// UPDATED: Now takes parameters so it can save ANY game
+async function saveMasterLeaderboardToHive(gameName, leaderboardData) {
     if (!ACTIVE_KEY) {
-        console.log("⚠️ Cannot backup to Hive: No ACTIVE_KEY set.");
+        console.log(`⚠️ Cannot backup ${gameName} to Hive: No ACTIVE_KEY set.`);
         return;
     }
     const op = [
@@ -59,14 +77,14 @@ async function saveMasterLeaderboardToHive() {
             required_auths: [ACCOUNT_NAME],
             required_posting_auths: [],
             id: 'hivecade_master_leaderboard',
-            json: JSON.stringify({ game: 'tetris', leaderboard: globalTetrisScores })
+            json: JSON.stringify({ game: gameName, leaderboard: leaderboardData })
         }
     ];
     try {
         await client.broadcast.sendOperations([op], ACTIVE_KEY);
-        console.log("💾 Master leaderboard successfully backed up to Hive!");
+        console.log(`💾 Master ${gameName} leaderboard successfully backed up to Hive!`);
     } catch (err) {
-        console.error("❌ Failed to backup leaderboard:", err.message);
+        console.error(`❌ Failed to backup ${gameName} leaderboard:`, err.message);
     }
 }
 
@@ -103,7 +121,9 @@ async function processMatchPayout(winner, loser) {
 io.on('connection', (socket) => {
     console.log(`📡 New Connection: ${socket.id}`);
 
+    // Emit initial scores on connection
     socket.emit('update_global_tetris_leaderboard', globalTetrisScores);
+    socket.emit('update_global_invaders_leaderboard', globalInvadersScores); // NEW
 
     socket.on('submit_tetris_score', (data) => {
         const { username, score } = data;
@@ -127,7 +147,34 @@ io.on('connection', (socket) => {
             globalTetrisScores.sort((a, b) => b.score - a.score);
             globalTetrisScores = globalTetrisScores.slice(0, 10);
             io.emit('update_global_tetris_leaderboard', globalTetrisScores);
-            saveMasterLeaderboardToHive();
+            saveMasterLeaderboardToHive('tetris', globalTetrisScores); // UPDATED
+        }
+    });
+
+    // NEW: Invaders Score Submission Logic
+    socket.on('submit_invaders_score', (data) => {
+        const { username, score } = data;
+        if (!username || typeof score !== 'number') return;
+        const cleanUser = username.toLowerCase().trim();
+        let leaderboardChanged = false;
+
+        const existingIdx = globalInvadersScores.findIndex(s => s.username === cleanUser);
+        if (existingIdx !== -1) {
+            if (score > globalInvadersScores[existingIdx].score) {
+                globalInvadersScores[existingIdx].score = score;
+                globalInvadersScores[existingIdx].timestamp = Date.now();
+                leaderboardChanged = true;
+            }
+        } else {
+            globalInvadersScores.push({ username: cleanUser, score: score, timestamp: Date.now() });
+            leaderboardChanged = true;
+        }
+
+        if (leaderboardChanged) {
+            globalInvadersScores.sort((a, b) => b.score - a.score);
+            globalInvadersScores = globalInvadersScores.slice(0, 10);
+            io.emit('update_global_invaders_leaderboard', globalInvadersScores);
+            saveMasterLeaderboardToHive('invaders', globalInvadersScores);
         }
     });
 
@@ -178,7 +225,6 @@ io.on('connection', (socket) => {
         };
         socket.join(roomCode);
         
-        // 🚨 FIX: Match the exact name and data structure the client expects
         socket.emit('room_created', { roomCode: roomCode, roomId: roomCode });
 
         const guestName = pendingChallenges[hostName];
@@ -192,7 +238,6 @@ io.on('connection', (socket) => {
         broadcastLobbyState();
     });
 
-    // 🚨 FIX: Added missing room validation listener
     socket.on('validate_room', (data) => {
         const room = games[data.roomCode];
         const exists = room && room.player2 === null;
