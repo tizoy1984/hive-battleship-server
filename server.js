@@ -23,28 +23,22 @@ let pendingChallenges = {}; // Tracks Host -> Guest pairings
 // GLOBAL TETRIS ARCADE STATE
 let globalTetrisScores = []; // Holds { username, score, timestamp }
 
-// --- NEW: FETCH MASTER SAVE FILE FROM BLOCKCHAIN ---
+// --- FETCH MASTER SAVE FILE FROM BLOCKCHAIN ---
 async function loadBlockchainScores() {
     console.log("📡 Searching 'cbrs' history for the Master Tetris Leaderboard...");
     try {
-        // Fetch recent history from the hub account
         const history = await client.call('condenser_api', 'get_account_history', [ACCOUNT_NAME, -1, 300]);
-        
-        // Loop BACKWARDS to find the MOST RECENT save file
         for (let i = history.length - 1; i >= 0; i--) {
             const op = history[i][1].op;
-            
             if (op && op[0] === 'custom_json' && op[1].id === 'hivecade_master_leaderboard') {
                 try {
                     const data = JSON.parse(op[1].json);
                     if (data.game === 'tetris' && data.leaderboard) {
                         globalTetrisScores = data.leaderboard;
                         console.log(`✅ SUCCESS: Loaded ${globalTetrisScores.length} scores from master backup!`);
-                        return; // Stop searching, we found the newest one!
+                        return;
                     }
-                } catch (e) {
-                    // Ignore parse errors
-                }
+                } catch (e) { }
             }
         }
         console.log("⚠️ No master leaderboard found in recent history. Starting fresh.");
@@ -53,26 +47,21 @@ async function loadBlockchainScores() {
     }
 }
 
-// --- NEW: BACKUP MASTER LIST TO HIVE ---
+// --- BACKUP MASTER LIST TO HIVE ---
 async function saveMasterLeaderboardToHive() {
     if (!ACTIVE_KEY) {
         console.log("⚠️ Cannot backup to Hive: No ACTIVE_KEY set.");
         return;
     }
-    
     const op = [
         'custom_json',
         {
-            required_auths: [ACCOUNT_NAME], // Using Active Key auth
+            required_auths: [ACCOUNT_NAME],
             required_posting_auths: [],
             id: 'hivecade_master_leaderboard',
-            json: JSON.stringify({ 
-                game: 'tetris', 
-                leaderboard: globalTetrisScores 
-            })
+            json: JSON.stringify({ game: 'tetris', leaderboard: globalTetrisScores })
         }
     ];
-
     try {
         await client.broadcast.sendOperations([op], ACTIVE_KEY);
         console.log("💾 Master leaderboard successfully backed up to Hive!");
@@ -88,10 +77,7 @@ function broadcastLobbyState() {
         .map(code => ({ code, host: games[code].player1.username }));
     const activeBattles = Object.keys(games)
         .filter(code => games[code].player2 !== null)
-        .map(code => ({ 
-            p1: games[code].player1.username, 
-            p2: games[code].player2.username 
-        }));
+        .map(code => ({ p1: games[code].player1.username, p2: games[code].player2.username }));
 
     io.emit('lobby_state_update', { users: usersInLobby, openRooms: openRooms, activeBattles: activeBattles });
 }
@@ -117,20 +103,14 @@ async function processMatchPayout(winner, loser) {
 io.on('connection', (socket) => {
     console.log(`📡 New Connection: ${socket.id}`);
 
-    // --- ARCADE LOGIC ---
-    // Send current leaderboard immediately upon connection
     socket.emit('update_global_tetris_leaderboard', globalTetrisScores);
 
     socket.on('submit_tetris_score', (data) => {
         const { username, score } = data;
         if (!username || typeof score !== 'number') return;
-
         const cleanUser = username.toLowerCase().trim();
-        console.log(`🧩 Tetris Submission: @${cleanUser} scored ${score}`);
-
         let leaderboardChanged = false;
 
-        // Update existing or add new
         const existingIdx = globalTetrisScores.findIndex(s => s.username === cleanUser);
         if (existingIdx !== -1) {
             if (score > globalTetrisScores[existingIdx].score) {
@@ -144,13 +124,9 @@ io.on('connection', (socket) => {
         }
 
         if (leaderboardChanged) {
-            // Sort Top 10 and broadcast
             globalTetrisScores.sort((a, b) => b.score - a.score);
             globalTetrisScores = globalTetrisScores.slice(0, 10);
-            
             io.emit('update_global_tetris_leaderboard', globalTetrisScores);
-            
-            // Backup the new state to the blockchain!
             saveMasterLeaderboardToHive();
         }
     });
@@ -171,7 +147,6 @@ io.on('connection', (socket) => {
         if (targetSocketId) {
             pendingChallenges[fromUser] = toUser; 
             io.to(targetSocketId).emit('receive_challenge', { from: fromUser });
-
             setTimeout(() => {
                 if (pendingChallenges[fromUser] === toUser) {
                     delete pendingChallenges[fromUser];
@@ -202,7 +177,9 @@ io.on('connection', (socket) => {
             hits: { [socket.id]: 0 }
         };
         socket.join(roomCode);
-        socket.emit('lobby_created', { roomCode });
+        
+        // 🚨 FIX: Match the exact name and data structure the client expects
+        socket.emit('room_created', { roomCode: roomCode, roomId: roomCode });
 
         const guestName = pendingChallenges[hostName];
         if (guestName) {
@@ -213,6 +190,13 @@ io.on('connection', (socket) => {
             delete pendingChallenges[hostName];
         }
         broadcastLobbyState();
+    });
+
+    // 🚨 FIX: Added missing room validation listener
+    socket.on('validate_room', (data) => {
+        const room = games[data.roomCode];
+        const exists = room && room.player2 === null;
+        socket.emit('room_validation_result', { exists });
     });
 
     socket.on('join_lobby', (data) => {
@@ -267,6 +251,5 @@ io.on('connection', (socket) => {
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, async () => {
     console.log(`🚀 Hivecade Global Server on port ${PORT}`);
-    // Boot up sequence: Load the permanent scores!
     await loadBlockchainScores(); 
 });
