@@ -22,16 +22,17 @@ let pendingChallenges = {};
 
 // GLOBAL ARCADE STATE
 let globalTetrisScores = [];   // Holds { username, score, timestamp }
-let globalInvadersScores = []; // Holds { username, score, timestamp } <-- NEW
+let globalInvadersScores = []; // Holds { username, score, timestamp }
+let globalHexabreakScores = []; // <-- NEW: Holds { username, score, timestamp }
 
 // --- FETCH MASTER SAVE FILE FROM BLOCKCHAIN ---
 async function loadBlockchainScores() {
     console.log("📡 Searching 'cbrs' history for the Master Leaderboards...");
     try {
-        // Increased history search depth to ensure we find both game backups
         const history = await client.call('condenser_api', 'get_account_history', [ACCOUNT_NAME, -1, 1000]);
         let tetrisFound = false;
         let invadersFound = false;
+        let hexabreakFound = false;
 
         for (let i = history.length - 1; i >= 0; i--) {
             const op = history[i][1].op;
@@ -45,27 +46,32 @@ async function loadBlockchainScores() {
                         tetrisFound = true;
                     }
                     
-                    // NEW: Load Invaders Master Backup
                     if (data.game === 'invaders' && data.leaderboard && !invadersFound) {
                         globalInvadersScores = data.leaderboard;
                         console.log(`✅ SUCCESS: Loaded ${globalInvadersScores.length} Invaders scores from master backup!`);
                         invadersFound = true;
                     }
 
-                    // Stop searching if both are found
-                    if (tetrisFound && invadersFound) return;
+                    if (data.game === 'hexabreak' && data.leaderboard && !hexabreakFound) {
+                        globalHexabreakScores = data.leaderboard;
+                        console.log(`✅ SUCCESS: Loaded ${globalHexabreakScores.length} HexaBreak scores from master backup!`);
+                        hexabreakFound = true;
+                    }
+
+                    // Stop searching if all are found
+                    if (tetrisFound && invadersFound && hexabreakFound) return;
                 } catch (e) { }
             }
         }
         if (!tetrisFound) console.log("⚠️ No master Tetris leaderboard found. Starting fresh.");
         if (!invadersFound) console.log("⚠️ No master Invaders leaderboard found. Starting fresh.");
+        if (!hexabreakFound) console.log("⚠️ No master HexaBreak leaderboard found. Starting fresh.");
     } catch (err) {
         console.error("❌ Failed to load blockchain scores:", err.message);
     }
 }
 
 // --- BACKUP MASTER LIST TO HIVE ---
-// UPDATED: Now takes parameters so it can save ANY game
 async function saveMasterLeaderboardToHive(gameName, leaderboardData) {
     if (!ACTIVE_KEY) {
         console.log(`⚠️ Cannot backup ${gameName} to Hive: No ACTIVE_KEY set.`);
@@ -123,7 +129,8 @@ io.on('connection', (socket) => {
 
     // Emit initial scores on connection
     socket.emit('update_global_tetris_leaderboard', globalTetrisScores);
-    socket.emit('update_global_invaders_leaderboard', globalInvadersScores); // NEW
+    socket.emit('update_global_invaders_leaderboard', globalInvadersScores);
+    socket.emit('update_global_hexabreak_leaderboard', globalHexabreakScores); // <-- NEW
 
     socket.on('submit_tetris_score', (data) => {
         const { username, score } = data;
@@ -147,11 +154,10 @@ io.on('connection', (socket) => {
             globalTetrisScores.sort((a, b) => b.score - a.score);
             globalTetrisScores = globalTetrisScores.slice(0, 10);
             io.emit('update_global_tetris_leaderboard', globalTetrisScores);
-            saveMasterLeaderboardToHive('tetris', globalTetrisScores); // UPDATED
+            saveMasterLeaderboardToHive('tetris', globalTetrisScores);
         }
     });
 
-    // NEW: Invaders Score Submission Logic
     socket.on('submit_invaders_score', (data) => {
         const { username, score } = data;
         if (!username || typeof score !== 'number') return;
@@ -175,6 +181,33 @@ io.on('connection', (socket) => {
             globalInvadersScores = globalInvadersScores.slice(0, 10);
             io.emit('update_global_invaders_leaderboard', globalInvadersScores);
             saveMasterLeaderboardToHive('invaders', globalInvadersScores);
+        }
+    });
+
+    // <-- NEW: HexaBreak Score Submission Logic -->
+    socket.on('submit_hexabreak_score', (data) => {
+        const { username, score } = data;
+        if (!username || typeof score !== 'number') return;
+        const cleanUser = username.toLowerCase().trim();
+        let leaderboardChanged = false;
+
+        const existingIdx = globalHexabreakScores.findIndex(s => s.username === cleanUser);
+        if (existingIdx !== -1) {
+            if (score > globalHexabreakScores[existingIdx].score) {
+                globalHexabreakScores[existingIdx].score = score;
+                globalHexabreakScores[existingIdx].timestamp = Date.now();
+                leaderboardChanged = true;
+            }
+        } else {
+            globalHexabreakScores.push({ username: cleanUser, score: score, timestamp: Date.now() });
+            leaderboardChanged = true;
+        }
+
+        if (leaderboardChanged) {
+            globalHexabreakScores.sort((a, b) => b.score - a.score);
+            globalHexabreakScores = globalHexabreakScores.slice(0, 10);
+            io.emit('update_global_hexabreak_leaderboard', globalHexabreakScores);
+            saveMasterLeaderboardToHive('hexabreak', globalHexabreakScores);
         }
     });
 
