@@ -21,9 +21,9 @@ let games = {};
 let pendingChallenges = {}; 
 
 // GLOBAL ARCADE STATE
-let globalTetrisScores = [];   // Holds { username, score, timestamp }
-let globalInvadersScores = []; // Holds { username, score, timestamp }
-let globalHexabreakScores = []; // <-- NEW: Holds { username, score, timestamp }
+let globalTetrisScores = [];   
+let globalInvadersScores = []; 
+let globalHexabreakScores = []; 
 
 // --- FETCH MASTER SAVE FILE FROM BLOCKCHAIN ---
 async function loadBlockchainScores() {
@@ -130,7 +130,7 @@ io.on('connection', (socket) => {
     // Emit initial scores on connection
     socket.emit('update_global_tetris_leaderboard', globalTetrisScores);
     socket.emit('update_global_invaders_leaderboard', globalInvadersScores);
-    socket.emit('update_global_hexabreak_leaderboard', globalHexabreakScores); // <-- NEW
+    socket.emit('update_global_hexabreak_leaderboard', globalHexabreakScores); 
 
     socket.on('submit_tetris_score', (data) => {
         const { username, score } = data;
@@ -184,7 +184,6 @@ io.on('connection', (socket) => {
         }
     });
 
-    // <-- NEW: HexaBreak Score Submission Logic -->
     socket.on('submit_hexabreak_score', (data) => {
         const { username, score } = data;
         if (!username || typeof score !== 'number') return;
@@ -210,6 +209,43 @@ io.on('connection', (socket) => {
             saveMasterLeaderboardToHive('hexabreak', globalHexabreakScores);
         }
     });
+
+    // --- WHEEL OF NAMES LOGIC (NEW) ---
+    socket.on('process_wheel_payouts', async (data) => {
+        const { hostName, winners } = data; 
+        
+        if (!ACTIVE_KEY) {
+            console.log("❌ Wheel Payout Error: cbrs Active Key not set.");
+            socket.emit('wheel_payout_result', { success: false, message: "Server misconfiguration. Active Key missing." });
+            return;
+        }
+
+        console.log(`🎁 Escrow complete! Paying ${winners.length} winners for host: ${hostName}`);
+        
+        // Loop through and automatically pay every winner from the cbrs bank
+        for (const winner of winners) {
+            if (winner.prize <= 0) continue;
+            try {
+                // Ensure the prize string is formatted perfectly for Hive ("0.000 HIVE")
+                const amountFormatted = parseFloat(winner.prize).toFixed(3) + " HIVE";
+                
+                await client.broadcast.transfer({ 
+                    from: ACCOUNT_NAME, 
+                    to: winner.name, 
+                    amount: amountFormatted, 
+                    memo: `🎉 You won the Hive Wheel Giveaway hosted by @${hostName}!` 
+                }, ACTIVE_KEY);
+                
+                console.log(`✅ Wheel Payout Success: ${amountFormatted} sent to ${winner.name}`);
+            } catch (err) { 
+                console.error(`❌ Wheel Payout Failed for ${winner.name}:`, err.message); 
+            }
+        }
+        
+        // Alert the frontend that the server finished its job
+        socket.emit('wheel_payout_result', { success: true });
+    });
+
 
     // --- BATTLESHIP LOGIC ---
     socket.on('register_user', (data) => {
