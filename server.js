@@ -21,10 +21,10 @@ let games = {};
 let pendingChallenges = {}; 
 
 // GLOBAL ARCADE STATE
-let globalTetrisScores = [];   // Holds { username, score, timestamp }
-let globalInvadersScores = []; // Holds { username, score, timestamp }
-let globalHexabreakScores = []; // Holds { username, score, timestamp }
-let globalUpdates = []; // <-- NEW: Array to hold all the Hivecade blog updates
+let globalTetrisScores = [];   
+let globalInvadersScores = []; 
+let globalHexabreakScores = []; 
+let globalUpdates = []; // Holds { id, title, image, link, timestamp }
 
 // --- FETCH MASTER SAVE FILE FROM BLOCKCHAIN ---
 async function loadBlockchainScores() {
@@ -43,30 +43,23 @@ async function loadBlockchainScores() {
                     
                     if (data.game === 'tetris' && data.leaderboard && !tetrisFound) {
                         globalTetrisScores = data.leaderboard;
-                        console.log(`✅ SUCCESS: Loaded ${globalTetrisScores.length} Tetris scores from master backup!`);
                         tetrisFound = true;
                     }
                     
                     if (data.game === 'invaders' && data.leaderboard && !invadersFound) {
                         globalInvadersScores = data.leaderboard;
-                        console.log(`✅ SUCCESS: Loaded ${globalInvadersScores.length} Invaders scores from master backup!`);
                         invadersFound = true;
                     }
 
                     if (data.game === 'hexabreak' && data.leaderboard && !hexabreakFound) {
                         globalHexabreakScores = data.leaderboard;
-                        console.log(`✅ SUCCESS: Loaded ${globalHexabreakScores.length} HexaBreak scores from master backup!`);
                         hexabreakFound = true;
                     }
 
-                    // Stop searching if all are found
                     if (tetrisFound && invadersFound && hexabreakFound) return;
                 } catch (e) { }
             }
         }
-        if (!tetrisFound) console.log("⚠️ No master Tetris leaderboard found. Starting fresh.");
-        if (!invadersFound) console.log("⚠️ No master Invaders leaderboard found. Starting fresh.");
-        if (!hexabreakFound) console.log("⚠️ No master HexaBreak leaderboard found. Starting fresh.");
     } catch (err) {
         console.error("❌ Failed to load blockchain scores:", err.message);
     }
@@ -74,10 +67,7 @@ async function loadBlockchainScores() {
 
 // --- BACKUP MASTER LIST TO HIVE ---
 async function saveMasterLeaderboardToHive(gameName, leaderboardData) {
-    if (!ACTIVE_KEY) {
-        console.log(`⚠️ Cannot backup ${gameName} to Hive: No ACTIVE_KEY set.`);
-        return;
-    }
+    if (!ACTIVE_KEY) return;
     const op = [
         'custom_json',
         {
@@ -89,9 +79,9 @@ async function saveMasterLeaderboardToHive(gameName, leaderboardData) {
     ];
     try {
         await client.broadcast.sendOperations([op], ACTIVE_KEY);
-        console.log(`💾 Master ${gameName} leaderboard successfully backed up to Hive!`);
+        console.log(`💾 Master ${gameName} leaderboard backed up!`);
     } catch (err) {
-        console.error(`❌ Failed to backup ${gameName} leaderboard:`, err.message);
+        console.error(`❌ Failed to backup ${gameName}:`, err.message);
     }
 }
 
@@ -107,54 +97,41 @@ function broadcastLobbyState() {
     io.emit('lobby_state_update', { users: usersInLobby, openRooms: openRooms, activeBattles: activeBattles });
 }
 
-// --- PAYOUT LOGIC ---
 async function processMatchPayout(winner, loser) {
-    if (!ACTIVE_KEY) return console.log("❌ Payout Error: Active Key not set in environment.");
+    if (!ACTIVE_KEY) return;
     const payouts = [
-        { to: winner, amount: "1.900 HIVE", memo: `🏆 Victory payout vs @${loser} (Hive Battleship)` },
-        { to: 'null', amount: "0.050 HIVE", memo: "🔥 Deflationary Burn (Hive Battleship)" },
-        { to: 'cbrs', amount: "0.050 HIVE", memo: "🏦 Dev Fee (Hive Battleship)" }
+        { to: winner, amount: "1.900 HIVE", memo: `🏆 Victory payout vs @${loser}` },
+        { to: 'null', amount: "0.050 HIVE", memo: "🔥 Burn" },
+        { to: 'cbrs', amount: "0.050 HIVE", memo: "🏦 Dev Fee" }
     ];
     for (const p of payouts) {
         try {
             await client.broadcast.transfer({ from: ACCOUNT_NAME, to: p.to, amount: p.amount, memo: p.memo }, ACTIVE_KEY);
-            console.log(`✅ Paid ${p.amount} to ${p.to}`);
-        } catch (err) { 
-            console.error(`❌ Payout failed for ${p.to}:`, err.message); 
-        }
+        } catch (err) { console.error("Payout error:", err.message); }
     }
 }
 
 io.on('connection', (socket) => {
-    console.log(`📡 New Connection: ${socket.id}`);
-
-    // Emit initial scores on connection
+    // Initial data sync
     socket.emit('update_global_tetris_leaderboard', globalTetrisScores);
     socket.emit('update_global_invaders_leaderboard', globalInvadersScores);
     socket.emit('update_global_hexabreak_leaderboard', globalHexabreakScores); 
-    
-    // <-- NEW: Send the current list of updates to the new player!
     socket.emit('receive_all_updates', globalUpdates); 
 
+    // --- SCORE SUBMISSIONS ---
     socket.on('submit_tetris_score', (data) => {
         const { username, score } = data;
-        if (!username || typeof score !== 'number') return;
         const cleanUser = username.toLowerCase().trim();
-        let leaderboardChanged = false;
-
         const existingIdx = globalTetrisScores.findIndex(s => s.username === cleanUser);
         if (existingIdx !== -1) {
             if (score > globalTetrisScores[existingIdx].score) {
                 globalTetrisScores[existingIdx].score = score;
-                globalTetrisScores[existingIdx].timestamp = Date.now();
-                leaderboardChanged = true;
+                globalTetrisScores.sort((a, b) => b.score - a.score);
+                io.emit('update_global_tetris_leaderboard', globalTetrisScores);
+                saveMasterLeaderboardToHive('tetris', globalTetrisScores);
             }
         } else {
-            globalTetrisScores.push({ username: cleanUser, score: score, timestamp: Date.now() });
-            leaderboardChanged = true;
-        }
-
-        if (leaderboardChanged) {
+            globalTetrisScores.push({ username: cleanUser, score, timestamp: Date.now() });
             globalTetrisScores.sort((a, b) => b.score - a.score);
             globalTetrisScores = globalTetrisScores.slice(0, 10);
             io.emit('update_global_tetris_leaderboard', globalTetrisScores);
@@ -164,23 +141,17 @@ io.on('connection', (socket) => {
 
     socket.on('submit_invaders_score', (data) => {
         const { username, score } = data;
-        if (!username || typeof score !== 'number') return;
         const cleanUser = username.toLowerCase().trim();
-        let leaderboardChanged = false;
-
         const existingIdx = globalInvadersScores.findIndex(s => s.username === cleanUser);
         if (existingIdx !== -1) {
             if (score > globalInvadersScores[existingIdx].score) {
                 globalInvadersScores[existingIdx].score = score;
-                globalInvadersScores[existingIdx].timestamp = Date.now();
-                leaderboardChanged = true;
+                globalInvadersScores.sort((a, b) => b.score - a.score);
+                io.emit('update_global_invaders_leaderboard', globalInvadersScores);
+                saveMasterLeaderboardToHive('invaders', globalInvadersScores);
             }
         } else {
-            globalInvadersScores.push({ username: cleanUser, score: score, timestamp: Date.now() });
-            leaderboardChanged = true;
-        }
-
-        if (leaderboardChanged) {
+            globalInvadersScores.push({ username: cleanUser, score, timestamp: Date.now() });
             globalInvadersScores.sort((a, b) => b.score - a.score);
             globalInvadersScores = globalInvadersScores.slice(0, 10);
             io.emit('update_global_invaders_leaderboard', globalInvadersScores);
@@ -190,23 +161,17 @@ io.on('connection', (socket) => {
 
     socket.on('submit_hexabreak_score', (data) => {
         const { username, score } = data;
-        if (!username || typeof score !== 'number') return;
         const cleanUser = username.toLowerCase().trim();
-        let leaderboardChanged = false;
-
         const existingIdx = globalHexabreakScores.findIndex(s => s.username === cleanUser);
         if (existingIdx !== -1) {
             if (score > globalHexabreakScores[existingIdx].score) {
                 globalHexabreakScores[existingIdx].score = score;
-                globalHexabreakScores[existingIdx].timestamp = Date.now();
-                leaderboardChanged = true;
+                globalHexabreakScores.sort((a, b) => b.score - a.score);
+                io.emit('update_global_hexabreak_leaderboard', globalHexabreakScores);
+                saveMasterLeaderboardToHive('hexabreak', globalHexabreakScores);
             }
         } else {
-            globalHexabreakScores.push({ username: cleanUser, score: score, timestamp: Date.now() });
-            leaderboardChanged = true;
-        }
-
-        if (leaderboardChanged) {
+            globalHexabreakScores.push({ username: cleanUser, score, timestamp: Date.now() });
             globalHexabreakScores.sort((a, b) => b.score - a.score);
             globalHexabreakScores = globalHexabreakScores.slice(0, 10);
             io.emit('update_global_hexabreak_leaderboard', globalHexabreakScores);
@@ -214,42 +179,31 @@ io.on('connection', (socket) => {
         }
     });
 
-    // <-- NEW: Admin Update & Delete Logic -->
-    socket.on('publish_update', (newUpdateData) => {
-        if (newUpdateData && newUpdateData.title && newUpdateData.link) {
-            
-            if (newUpdateData.id) {
-                // EDITING AN EXISTING UPDATE
-                const index = globalUpdates.findIndex(u => u.id === newUpdateData.id);
-                if (index !== -1) {
-                    globalUpdates[index].title = newUpdateData.title;
-                    globalUpdates[index].image = newUpdateData.image || '';
-                    globalUpdates[index].link = newUpdateData.link;
+    // --- UPDATES LOGIC (EDIT/DELETE) ---
+    socket.on('publish_update', (data) => {
+        if (data.title && data.link) {
+            if (data.id) {
+                const idx = globalUpdates.findIndex(u => u.id === data.id);
+                if (idx !== -1) {
+                    globalUpdates[idx] = { ...globalUpdates[idx], title: data.title, image: data.image, link: data.link };
                 }
             } else {
-                // CREATING A BRAND NEW UPDATE
                 globalUpdates.unshift({
-                    id: Date.now().toString(), // Give it a unique ID!
-                    title: newUpdateData.title,
-                    image: newUpdateData.image || '',
-                    link: newUpdateData.link,
+                    id: Date.now().toString(),
+                    title: data.title,
+                    image: data.image,
+                    link: data.link,
                     timestamp: Date.now()
                 });
-
-                if (globalUpdates.length > 10) {
-                    globalUpdates.pop();
-                }
+                if (globalUpdates.length > 10) globalUpdates.pop();
             }
-
             io.emit('receive_all_updates', globalUpdates);
-            console.log(`📰 Admin published/edited update: ${newUpdateData.title}`);
         }
     });
 
-    socket.on('delete_update', (updateId) => {
-        globalUpdates = globalUpdates.filter(u => u.id !== updateId);
+    socket.on('delete_update', (id) => {
+        globalUpdates = globalUpdates.filter(u => u.id !== id);
         io.emit('receive_all_updates', globalUpdates);
-        console.log(`🗑️ Admin deleted update: ${updateId}`);
     });
 
     // --- BATTLESHIP LOGIC ---
@@ -261,114 +215,70 @@ io.on('connection', (socket) => {
     });
 
     socket.on('send_challenge', (data) => {
-        const fromUser = data.from.toLowerCase().trim();
-        const toUser = data.to.toLowerCase().trim();
-        const targetSocketId = Object.keys(connectedUsers).find(id => connectedUsers[id] === toUser);
-
-        if (targetSocketId) {
-            pendingChallenges[fromUser] = toUser; 
-            io.to(targetSocketId).emit('receive_challenge', { from: fromUser });
-            setTimeout(() => {
-                if (pendingChallenges[fromUser] === toUser) {
-                    delete pendingChallenges[fromUser];
-                    socket.emit('challenge_expired', { to: toUser });
-                    io.to(targetSocketId).emit('challenge_withdrawn', { from: fromUser });
-                }
-            }, 30000);
+        const targetId = Object.keys(connectedUsers).find(id => connectedUsers[id] === data.to.toLowerCase().trim());
+        if (targetId) {
+            pendingChallenges[data.from.toLowerCase().trim()] = data.to.toLowerCase().trim(); 
+            io.to(targetId).emit('receive_challenge', { from: data.from });
         }
     });
 
     socket.on('accept_challenge', (data) => {
-        const hostUser = data.host.toLowerCase().trim();
-        if (pendingChallenges[hostUser]) {
-            const hostSocketId = Object.keys(connectedUsers).find(id => connectedUsers[id] === hostUser);
-            if (hostSocketId) {
-                io.to(hostSocketId).emit('challenge_accepted_by_guest', { guest: data.guest });
-            }
-        }
+        const hostId = Object.keys(connectedUsers).find(id => connectedUsers[id] === data.host.toLowerCase().trim());
+        if (hostId) io.to(hostId).emit('challenge_accepted_by_guest', { guest: data.guest });
     });
 
     socket.on('create_lobby', (data) => {
         const roomCode = Math.random().toString(36).substring(2, 7).toUpperCase();
-        const hostName = data.username.toLowerCase().trim();
         games[roomCode] = {
-            player1: { socket, username: hostName, board: data.board },
-            player2: null, 
-            currentTurn: socket.id, 
-            hits: { [socket.id]: 0 }
+            player1: { socket, username: data.username.toLowerCase().trim(), board: data.board },
+            player2: null, currentTurn: socket.id, hits: { [socket.id]: 0 }
         };
         socket.join(roomCode);
-        
-        socket.emit('room_created', { roomCode: roomCode, roomId: roomCode });
-
-        const guestName = pendingChallenges[hostName];
-        if (guestName) {
-            const guestSocketId = Object.keys(connectedUsers).find(id => connectedUsers[id] === guestName);
-            if (guestSocketId) {
-                io.to(guestSocketId).emit('challenge_room_ready', { roomCode, host: hostName });
-            }
-            delete pendingChallenges[hostName];
-        }
+        socket.emit('room_created', { roomCode });
         broadcastLobbyState();
-    });
-
-    socket.on('validate_room', (data) => {
-        const room = games[data.roomCode];
-        const exists = room && room.player2 === null;
-        socket.emit('room_validation_result', { exists });
     });
 
     socket.on('join_lobby', (data) => {
         const game = games[data.roomCode];
-        if (!game || game.player2 !== null) return;
-        const guestName = data.username.toLowerCase().trim();
-        game.player2 = { socket, username: guestName, board: data.board };
-        game.hits[socket.id] = 0;
-        socket.join(data.roomCode);
-        game.player1.socket.emit('match_found', { opponentName: guestName, yourTurn: true, roomId: data.roomCode });
-        socket.emit('match_found', { opponentName: game.player1.username, yourTurn: false, roomId: data.roomCode });
-        broadcastLobbyState();
+        if (game && !game.player2) {
+            game.player2 = { socket, username: data.username.toLowerCase().trim(), board: data.board };
+            game.hits[socket.id] = 0;
+            socket.join(data.roomCode);
+            game.player1.socket.emit('match_found', { opponentName: game.player2.username, yourTurn: true, roomId: data.roomCode });
+            socket.emit('match_found', { opponentName: game.player1.username, yourTurn: false, roomId: data.roomCode });
+            broadcastLobbyState();
+        }
     });
 
     socket.on('fire_missile', (data) => {
         const game = games[data.roomId];
-        if (!game || game.currentTurn !== socket.id) return;
-
-        const isPlayer1 = (socket.id === game.player1.socket.id);
-        const defender = isPlayer1 ? game.player2 : game.player1;
-        const isHit = (defender.board[data.targetIndex] !== null);
-        
-        io.to(data.roomId).emit('missile_result', { targetIndex: data.targetIndex, isHit, attackerId: socket.id });
-        
-        if (isHit) {
-            game.hits[socket.id] += 1;
-            if (game.hits[socket.id] >= 17) {
-                const winnerName = isPlayer1 ? game.player1.username : game.player2.username;
-                io.to(data.roomId).emit('game_over', { winnerId: socket.id, winnerName, loserName: defender.username });
-                processMatchPayout(winnerName, defender.username);
-                delete games[data.roomId];
-                broadcastLobbyState();
-                return;
+        if (game && game.currentTurn === socket.id) {
+            const defender = socket.id === game.player1.socket.id ? game.player2 : game.player1;
+            const isHit = defender.board[data.targetIndex] !== null;
+            io.to(data.roomId).emit('missile_result', { targetIndex: data.targetIndex, isHit, attackerId: socket.id });
+            if (isHit) {
+                game.hits[socket.id]++;
+                if (game.hits[socket.id] >= 17) {
+                    io.to(data.roomId).emit('game_over', { winnerId: socket.id, winnerName: socket.id === game.player1.socket.id ? game.player1.username : game.player2.username });
+                    processMatchPayout(connectedUsers[socket.id], defender.username);
+                    delete games[data.roomId];
+                    broadcastLobbyState();
+                    return;
+                }
             }
+            game.currentTurn = defender.socket.id;
+            io.to(data.roomId).emit('turn_update', { currentTurnId: game.currentTurn });
         }
-        game.currentTurn = defender.socket.id;
-        io.to(data.roomId).emit('turn_update', { currentTurnId: game.currentTurn });
     });
 
     socket.on('disconnect', () => {
         delete connectedUsers[socket.id];
-        for (const roomId in games) {
-            const game = games[roomId];
-            if (game.player1.socket.id === socket.id || (game.player2 && game.player2.socket.id === socket.id)) {
-                delete games[roomId];
-            }
-        }
         broadcastLobbyState();
     });
 });
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, async () => {
-    console.log(`🚀 Hivecade Global Server on port ${PORT}`);
+    console.log(`🚀 Server on port ${PORT}`);
     await loadBlockchainScores(); 
 });
