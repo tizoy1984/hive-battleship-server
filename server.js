@@ -23,7 +23,8 @@ let pendingChallenges = {};
 // GLOBAL ARCADE STATE
 let globalTetrisScores = [];   // Holds { username, score, timestamp }
 let globalInvadersScores = []; // Holds { username, score, timestamp }
-let globalHexabreakScores = []; // <-- NEW: Holds { username, score, timestamp }
+let globalHexabreakScores = []; // Holds { username, score, timestamp }
+let globalUpdates = []; // <-- NEW: Array to hold all the Hivecade blog updates
 
 // --- FETCH MASTER SAVE FILE FROM BLOCKCHAIN ---
 async function loadBlockchainScores() {
@@ -130,7 +131,10 @@ io.on('connection', (socket) => {
     // Emit initial scores on connection
     socket.emit('update_global_tetris_leaderboard', globalTetrisScores);
     socket.emit('update_global_invaders_leaderboard', globalInvadersScores);
-    socket.emit('update_global_hexabreak_leaderboard', globalHexabreakScores); // <-- NEW
+    socket.emit('update_global_hexabreak_leaderboard', globalHexabreakScores); 
+    
+    // <-- NEW: Send the current list of updates to the new player!
+    socket.emit('receive_all_updates', globalUpdates); 
 
     socket.on('submit_tetris_score', (data) => {
         const { username, score } = data;
@@ -184,7 +188,6 @@ io.on('connection', (socket) => {
         }
     });
 
-    // <-- NEW: HexaBreak Score Submission Logic -->
     socket.on('submit_hexabreak_score', (data) => {
         const { username, score } = data;
         if (!username || typeof score !== 'number') return;
@@ -208,6 +211,30 @@ io.on('connection', (socket) => {
             globalHexabreakScores = globalHexabreakScores.slice(0, 10);
             io.emit('update_global_hexabreak_leaderboard', globalHexabreakScores);
             saveMasterLeaderboardToHive('hexabreak', globalHexabreakScores);
+        }
+    });
+
+    // <-- NEW: Admin Update Submission Logic -->
+    socket.on('publish_update', (newUpdateData) => {
+        // Very basic security: Only accept it if it has a title and link
+        if (newUpdateData && newUpdateData.title && newUpdateData.link) {
+            
+            // Add the new update to the front of the server's array
+            globalUpdates.unshift({
+                title: newUpdateData.title,
+                image: newUpdateData.image || '',
+                link: newUpdateData.link,
+                timestamp: Date.now()
+            });
+
+            // Keep the array from getting infinitely huge (keep only the newest 10 posts)
+            if (globalUpdates.length > 10) {
+                globalUpdates.pop();
+            }
+
+            // Immediately broadcast the NEW list to EVERY connected player!
+            io.emit('receive_all_updates', globalUpdates);
+            console.log(`📰 Admin published new update: ${newUpdateData.title}`);
         }
     });
 
