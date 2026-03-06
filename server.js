@@ -214,28 +214,42 @@ io.on('connection', (socket) => {
         }
     });
 
-    // <-- NEW: Admin Update Submission Logic -->
+    // <-- NEW: Admin Update & Delete Logic -->
     socket.on('publish_update', (newUpdateData) => {
-        // Very basic security: Only accept it if it has a title and link
         if (newUpdateData && newUpdateData.title && newUpdateData.link) {
             
-            // Add the new update to the front of the server's array
-            globalUpdates.unshift({
-                title: newUpdateData.title,
-                image: newUpdateData.image || '',
-                link: newUpdateData.link,
-                timestamp: Date.now()
-            });
+            if (newUpdateData.id) {
+                // EDITING AN EXISTING UPDATE
+                const index = globalUpdates.findIndex(u => u.id === newUpdateData.id);
+                if (index !== -1) {
+                    globalUpdates[index].title = newUpdateData.title;
+                    globalUpdates[index].image = newUpdateData.image || '';
+                    globalUpdates[index].link = newUpdateData.link;
+                }
+            } else {
+                // CREATING A BRAND NEW UPDATE
+                globalUpdates.unshift({
+                    id: Date.now().toString(), // Give it a unique ID!
+                    title: newUpdateData.title,
+                    image: newUpdateData.image || '',
+                    link: newUpdateData.link,
+                    timestamp: Date.now()
+                });
 
-            // Keep the array from getting infinitely huge (keep only the newest 10 posts)
-            if (globalUpdates.length > 10) {
-                globalUpdates.pop();
+                if (globalUpdates.length > 10) {
+                    globalUpdates.pop();
+                }
             }
 
-            // Immediately broadcast the NEW list to EVERY connected player!
             io.emit('receive_all_updates', globalUpdates);
-            console.log(`📰 Admin published new update: ${newUpdateData.title}`);
+            console.log(`📰 Admin published/edited update: ${newUpdateData.title}`);
         }
+    });
+
+    socket.on('delete_update', (updateId) => {
+        globalUpdates = globalUpdates.filter(u => u.id !== updateId);
+        io.emit('receive_all_updates', globalUpdates);
+        console.log(`🗑️ Admin deleted update: ${updateId}`);
     });
 
     // --- BATTLESHIP LOGIC ---
