@@ -24,7 +24,8 @@ let pendingChallenges = {};
 let globalTetrisScores = [];   
 let globalInvadersScores = []; 
 let globalHexabreakScores = []; 
-let globalUpdates = []; // Holds { id, title, image, link, timestamp }
+let globalAstroScores = []; // NEW
+let globalUpdates = []; 
 
 // --- FETCH MASTER SAVE FILE FROM BLOCKCHAIN ---
 async function loadBlockchainScores() {
@@ -34,6 +35,7 @@ async function loadBlockchainScores() {
         let tetrisFound = false;
         let invadersFound = false;
         let hexabreakFound = false;
+        let astroFound = false; // NEW
 
         for (let i = history.length - 1; i >= 0; i--) {
             const op = history[i][1].op;
@@ -55,8 +57,13 @@ async function loadBlockchainScores() {
                         globalHexabreakScores = data.leaderboard;
                         hexabreakFound = true;
                     }
+                    
+                    if (data.game === 'astro' && data.leaderboard && !astroFound) { // NEW
+                        globalAstroScores = data.leaderboard;
+                        astroFound = true;
+                    }
 
-                    if (tetrisFound && invadersFound && hexabreakFound) return;
+                    if (tetrisFound && invadersFound && hexabreakFound && astroFound) return;
                 } catch (e) { }
             }
         }
@@ -116,6 +123,7 @@ io.on('connection', (socket) => {
     socket.emit('update_global_tetris_leaderboard', globalTetrisScores);
     socket.emit('update_global_invaders_leaderboard', globalInvadersScores);
     socket.emit('update_global_hexabreak_leaderboard', globalHexabreakScores); 
+    socket.emit('update_global_astro_leaderboard', globalAstroScores); // NEW
     socket.emit('receive_all_updates', globalUpdates); 
 
     // --- SCORE SUBMISSIONS ---
@@ -176,6 +184,27 @@ io.on('connection', (socket) => {
             globalHexabreakScores = globalHexabreakScores.slice(0, 10);
             io.emit('update_global_hexabreak_leaderboard', globalHexabreakScores);
             saveMasterLeaderboardToHive('hexabreak', globalHexabreakScores);
+        }
+    });
+    
+    // NEW ASTRO SUBMISSION
+    socket.on('submit_astro_score', (data) => {
+        const { username, score } = data;
+        const cleanUser = username.toLowerCase().trim();
+        const existingIdx = globalAstroScores.findIndex(s => s.username === cleanUser);
+        if (existingIdx !== -1) {
+            if (score > globalAstroScores[existingIdx].score) {
+                globalAstroScores[existingIdx].score = score;
+                globalAstroScores.sort((a, b) => b.score - a.score);
+                io.emit('update_global_astro_leaderboard', globalAstroScores);
+                saveMasterLeaderboardToHive('astro', globalAstroScores);
+            }
+        } else {
+            globalAstroScores.push({ username: cleanUser, score, timestamp: Date.now() });
+            globalAstroScores.sort((a, b) => b.score - a.score);
+            globalAstroScores = globalAstroScores.slice(0, 10);
+            io.emit('update_global_astro_leaderboard', globalAstroScores);
+            saveMasterLeaderboardToHive('astro', globalAstroScores);
         }
     });
 
