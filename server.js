@@ -299,7 +299,6 @@ io.on('connection', (socket) => {
             io.to(data.roomId).emit('turn_update', { currentTurnId: game.currentTurn });
         }
     });
-
     socket.on('disconnect', () => {
         delete connectedUsers[socket.id];
         broadcastLobbyState();
