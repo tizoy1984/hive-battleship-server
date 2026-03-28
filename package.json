@@ -1,15 +1,17 @@
 {
   "name": "battleship",
   "version": "1.0.0",
-  "description": "Hive Battleship Server",
-  "main": "server.js",
+  "description": "",
+  "main": "script.js",
   "scripts": {
-    "start": "node server.js"
+    "test": "echo \"Error: no test specified\" && exit 1"
   },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
   "dependencies": {
-    "@hiveio/dhive": "^1.2.8",
     "cors": "^2.8.6",
-    "dotenv": "^16.4.5",
     "express": "^5.2.1",
     "socket.io": "^4.8.3"
   }
