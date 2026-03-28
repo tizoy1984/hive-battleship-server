@@ -21,23 +21,25 @@ const socketCorsList = (process.env.SOCKET_CORS_ORIGINS || 'https://hive.coldbee
     .filter(Boolean);
 const socketCorsWildcard = socketCorsList.length === 1 && socketCorsList[0] === '*';
 
-const io = new Server(server, {
-    cors: socketCorsWildcard
-        ? { origin: '*', methods: ['GET', 'POST', 'OPTIONS'] }
-        : {
-            origin: (origin, callback) => {
-                if (!origin) return callback(null, true);
-                if (socketCorsList.includes(origin)) return callback(null, true);
-                try {
-                    const host = new URL(origin).hostname;
-                    if (host.endsWith('.railway.app') || host.endsWith('.up.railway.app')) return callback(null, true);
-                } catch (e) { /* ignore */ }
-                callback(null, false);
-            },
-            methods: ['GET', 'POST', 'OPTIONS'],
-            credentials: true
-        }
-});
+const socketIoCors = socketCorsWildcard
+    ? { origin: '*', methods: ['GET', 'POST', 'OPTIONS'] }
+    : {
+        origin: (origin, callback) => {
+            if (!origin) return callback(null, true);
+            if (socketCorsList.includes(origin)) return callback(null, true);
+            try {
+                const host = new URL(origin).hostname;
+                if (host.endsWith('.railway.app') || host.endsWith('.up.railway.app')) return callback(null, true);
+                if (host.endsWith('.coldbeetrootsoup.com')) return callback(null, true);
+                if (host === 'localhost' || host === '127.0.0.1') return callback(null, true);
+            } catch (e) { /* ignore */ }
+            callback(null, false);
+        },
+        methods: ['GET', 'POST', 'OPTIONS'],
+        credentials: false
+    };
+
+const io = new Server(server, { cors: socketIoCors });
 
 // --- STATE MANAGEMENT ---
 let connectedUsers = {}; 
