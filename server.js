@@ -51,6 +51,8 @@ let globalTetrisScores = [];
 let globalInvadersScores = []; 
 let globalHexabreakScores = []; 
 let globalAstroScores = []; // NEW
+let globalRunnerScores = [];
+let globalRtypeScores = [];
 let globalUpdates = []; 
 
 // --- FETCH MASTER SAVE FILE FROM BLOCKCHAIN ---
@@ -62,6 +64,8 @@ async function loadBlockchainScores() {
         let invadersFound = false;
         let hexabreakFound = false;
         let astroFound = false; // NEW
+        let runnerFound = false;
+        let rtypeFound = false;
 
         for (let i = history.length - 1; i >= 0; i--) {
             const op = history[i][1].op;
@@ -150,6 +154,8 @@ io.on('connection', (socket) => {
     socket.emit('update_global_invaders_leaderboard', globalInvadersScores);
     socket.emit('update_global_hexabreak_leaderboard', globalHexabreakScores); 
     socket.emit('update_global_astro_leaderboard', globalAstroScores); // NEW
+    socket.emit('update_global_runner_leaderboard', globalRunnerScores);
+    socket.emit('update_global_rtype_leaderboard', globalRtypeScores);
     socket.emit('receive_all_updates', globalUpdates); 
 
     // --- SCORE SUBMISSIONS ---
@@ -231,6 +237,46 @@ io.on('connection', (socket) => {
             globalAstroScores = globalAstroScores.slice(0, 10);
             io.emit('update_global_astro_leaderboard', globalAstroScores);
             saveMasterLeaderboardToHive('astro', globalAstroScores);
+        }
+    });
+
+    socket.on('submit_runner_score', (data) => {
+        const { username, score } = data;
+        const cleanUser = username.toLowerCase().trim();
+        const existingIdx = globalRunnerScores.findIndex(s => s.username === cleanUser);
+        if (existingIdx !== -1) {
+            if (score > globalRunnerScores[existingIdx].score) {
+                globalRunnerScores[existingIdx].score = score;
+                globalRunnerScores.sort((a, b) => b.score - a.score);
+                io.emit('update_global_runner_leaderboard', globalRunnerScores);
+                saveMasterLeaderboardToHive('runner', globalRunnerScores);
+            }
+        } else {
+            globalRunnerScores.push({ username: cleanUser, score, timestamp: Date.now() });
+            globalRunnerScores.sort((a, b) => b.score - a.score);
+            globalRunnerScores = globalRunnerScores.slice(0, 10);
+            io.emit('update_global_runner_leaderboard', globalRunnerScores);
+            saveMasterLeaderboardToHive('runner', globalRunnerScores);
+        }
+    });
+
+    socket.on('submit_rtype_score', (data) => {
+        const { username, score } = data;
+        const cleanUser = username.toLowerCase().trim();
+        const existingIdx = globalRtypeScores.findIndex(s => s.username === cleanUser);
+        if (existingIdx !== -1) {
+            if (score > globalRtypeScores[existingIdx].score) {
+                globalRtypeScores[existingIdx].score = score;
+                globalRtypeScores.sort((a, b) => b.score - a.score);
+                io.emit('update_global_rtype_leaderboard', globalRtypeScores);
+                saveMasterLeaderboardToHive('rtype', globalRtypeScores);
+            }
+        } else {
+            globalRtypeScores.push({ username: cleanUser, score, timestamp: Date.now() });
+            globalRtypeScores.sort((a, b) => b.score - a.score);
+            globalRtypeScores = globalRtypeScores.slice(0, 10);
+            io.emit('update_global_rtype_leaderboard', globalRtypeScores);
+            saveMasterLeaderboardToHive('rtype', globalRtypeScores);
         }
     });
 
