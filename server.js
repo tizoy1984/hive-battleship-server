@@ -13,7 +13,31 @@ const ACCOUNT_NAME = 'cbrs';
 const ACTIVE_KEY = process.env.HIVE_ACTIVE_KEY ? PrivateKey.fromString(process.env.HIVE_ACTIVE_KEY) : null;
 
 const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: "*", methods: ["GET", "POST"] } });
+
+// Comma-separated list, or * for all. Default includes production Hive hub + local dev.
+const socketCorsList = (process.env.SOCKET_CORS_ORIGINS || 'https://hive.coldbeetrootsoup.com,http://localhost,http://127.0.0.1')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+const socketCorsWildcard = socketCorsList.length === 1 && socketCorsList[0] === '*';
+
+const io = new Server(server, {
+    cors: socketCorsWildcard
+        ? { origin: '*', methods: ['GET', 'POST', 'OPTIONS'] }
+        : {
+            origin: (origin, callback) => {
+                if (!origin) return callback(null, true);
+                if (socketCorsList.includes(origin)) return callback(null, true);
+                try {
+                    const host = new URL(origin).hostname;
+                    if (host.endsWith('.railway.app') || host.endsWith('.up.railway.app')) return callback(null, true);
+                } catch (e) { /* ignore */ }
+                callback(null, false);
+            },
+            methods: ['GET', 'POST', 'OPTIONS'],
+            credentials: true
+        }
+});
 
 // --- STATE MANAGEMENT ---
 let connectedUsers = {}; 
