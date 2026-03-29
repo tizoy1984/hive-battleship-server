@@ -336,6 +336,16 @@ io.on('connection', (socket) => {
         };
         socket.join(roomCode);
         socket.emit('room_created', { roomCode });
+        if (data.challengeGuest) {
+            const guestName = String(data.challengeGuest).toLowerCase().trim();
+            const guestSocketId = Object.keys(connectedUsers).find(id => connectedUsers[id] === guestName);
+            if (guestSocketId) {
+                io.to(guestSocketId).emit('challenge_room_ready', {
+                    roomCode,
+                    host: data.username.toLowerCase().trim()
+                });
+            }
+        }
         broadcastLobbyState();
     });
 
